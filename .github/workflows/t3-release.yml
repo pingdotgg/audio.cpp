@@ -45,7 +45,7 @@ jobs:
     name: Windows x64
     runs-on: windows-2022
     env:
-      VULKAN_VERSION: "1.4.350.0"
+      VULKAN_VERSION: "1.4.357.0"
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
