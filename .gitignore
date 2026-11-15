@@ -37,6 +37,10 @@ __pycache__/
 # --- portable bundle: distributed manually, never committed ---
 /audiocpp-portable/
 
+# --- T3 release builds (ci/t3) ---
+/dist-lib*/
+/audio-*-lib-*.tar.gz
+
 # --- Native WebUI build artifacts ---
 /webui/native/node_modules/
 /webui/native/.svelte-kit/

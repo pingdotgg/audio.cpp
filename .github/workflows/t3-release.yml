@@ -1,0 +1,151 @@
+name: T3 release
+
+# Builds the C API libraries T3 Code downloads for local speech synthesis, then publishes them as
+# a GitHub release. Linux builds in manylinux_2_28 so they load on glibc 2.28 and newer. Linux and
+# Windows load Vulkan and the per-CPU-generation kernels as ggml plugins, so hosts without a GPU
+# or Vulkan loader fall back to the CPU. OpenMP is off, so nothing depends on libgomp or vcomp.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, such as t3-2026.11.15
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+            image: quay.io/pypa/manylinux_2_28_x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          docker run --rm -v "$PWD":/src -w /src ${{ matrix.image }} \
+            bash ci/t3/build-linux-lib.sh "${{ inputs.tag }}" \
+            "audio-${{ inputs.tag }}-lib-linux-${{ matrix.arch }}-vulkan.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: audio-${{ inputs.tag }}-lib-linux-${{ matrix.arch }}-vulkan.tar.gz
+
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    env:
+      VULKAN_VERSION: "1.4.350.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        run: |
+          curl.exe -fsSL -o "$env:RUNNER_TEMP\vulkan_sdk.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkan_sdk.exe"
+          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S . -B build-t3 -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DAUDIOCPP_BUILD_C_API=ON `
+            -DAUDIOCPP_VERSION="${{ inputs.tag }}" `
+            -DENGINE_ENABLE_CUDA=OFF `
+            -DENGINE_ENABLE_VULKAN=ON `
+            -DENGINE_ENABLE_NATIVE_CPU=OFF `
+            -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON `
+            -DENGINE_ENABLE_LLAMAFILE=ON `
+            -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-t3 --target audiocpp --parallel $env:NUMBER_OF_PROCESSORS
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Stage and check
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-lib/libs, dist-lib/include | Out-Null
+          Copy-Item include/audiocpp.h dist-lib/include/
+          Copy-Item LICENSE dist-lib/
+          Copy-Item build-t3/bin/*.dll dist-lib/libs/
+          # Hosts without the Visual C++ runtime installed still load the library.
+          $crt = Get-ChildItem "$env:VCToolsRedistDir\x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
+          Copy-Item "$($crt.FullName)\*.dll" dist-lib/libs/
+          # Only the Vulkan plugin may import the loader, or GPU-less hosts could not load the library.
+          $imports = dumpbin /dependents dist-lib/libs/audiocpp.dll | Out-String
+          if ($imports -match "vulkan-1.dll") { throw "audiocpp.dll imports vulkan-1.dll" }
+          if (-not (Test-Path dist-lib/libs/ggml-vulkan.dll)) { throw "the Vulkan plugin is missing" }
+          Compress-Archive -Path dist-lib/* -DestinationPath "audio-${{ inputs.tag }}-lib-windows-x64-vulkan.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: audio-${{ inputs.tag }}-lib-windows-x64-vulkan.zip
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-26
+            backend: metal
+            metal: "ON"
+          # Upstream builds Intel Macs without Metal too.
+          - arch: x64
+            runner: macos-26-intel
+            backend: cpu
+            metal: "OFF"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S . -B build-t3 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_RPATH='@loader_path' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
+            -DAUDIOCPP_BUILD_C_API=ON \
+            -DAUDIOCPP_VERSION="${{ inputs.tag }}" \
+            -DENGINE_ENABLE_CUDA=OFF -DENGINE_ENABLE_VULKAN=OFF \
+            -DGGML_METAL=${{ matrix.metal }} \
+            -DENGINE_ENABLE_LLAMAFILE=ON \
+            -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF
+          cmake --build build-t3 --target audiocpp --parallel "$(sysctl -n hw.logicalcpu)"
+          mkdir -p dist-lib/libs dist-lib/include
+          cp include/audiocpp.h dist-lib/include/
+          cp LICENSE dist-lib/
+          find build-t3/bin -maxdepth 1 -name '*.dylib' -exec cp -P {} dist-lib/libs/ \;
+          tar -czf "audio-${{ inputs.tag }}-lib-macos-${{ matrix.arch }}-${{ matrix.backend }}.tar.gz" -C dist-lib .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: audio-${{ inputs.tag }}-lib-macos-${{ matrix.arch }}-${{ matrix.backend }}.tar.gz
+
+  release:
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd assets
+          sha256sum * > SHA256SUMS
+          gh release create "${{ inputs.tag }}" --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" --title "${{ inputs.tag }}" \
+            --notes "C API libraries for T3 Code, built from ${{ github.sha }}." *
