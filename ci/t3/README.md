@@ -14,9 +14,12 @@ The `T3 release` workflow builds the library the way transcribe.cpp builds its o
 - Linux x64 and arm64 inside `manylinux_2_28`, so the library loads on glibc 2.28 and newer.
   `build-linux-lib.sh` fails the build if any library needs a newer glibc, or links
   `libgomp` or `libatomic`.
-- Linux and Windows with `ENGINE_ENABLE_CPU_ALL_VARIANTS`, which builds ggml's Vulkan backend
+- Linux and Windows x64 with `ENGINE_ENABLE_CPU_ALL_VARIANTS`, which builds ggml's Vulkan backend
   and one CPU backend per CPU generation as plugins. Hosts without a Vulkan loader or GPU skip
   the Vulkan plugin and run on the CPU.
+- Windows ARM64 with clang, which ggml requires for ARM CPU kernels. ggml has no Windows ARM
+  variant list, so the fork's `ENGINE_ENABLE_BACKEND_PLUGINS` option keeps Vulkan a plugin with one
+  CPU backend targeting `armv8.2-a+dotprod+fp16`, which every Windows 11 ARM CPU supports.
 - OpenMP off everywhere.
 
 To release, run the `T3 release` workflow with a tag such as `t3-2026.11.15`, then pin the
