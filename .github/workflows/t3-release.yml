@@ -11,6 +11,10 @@ on:
       tag:
         description: Release tag, such as t3-2026.11.15
         required: true
+      publish:
+        description: Publish the release; leave off to only build and check the libraries.
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -42,20 +46,49 @@ jobs:
           path: audio-${{ inputs.tag }}-lib-linux-${{ matrix.arch }}-vulkan.tar.gz
 
   windows:
-    name: Windows x64
-    runs-on: windows-2022
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2022
+            sdk: windows
+            # MSVC builds one CPU backend per x86 CPU generation.
+            defines: -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON
+          # ggml needs clang for ARM CPU kernels and has no Windows ARM variant list, so this
+          # targets the oldest Windows 11 ARM CPUs (Snapdragon 7c, 8cx) with one CPU backend.
+          - arch: arm64
+            runner: windows-11-arm
+            sdk: warm
+            defines: >-
+              -DENGINE_ENABLE_BACKEND_PLUGINS=ON
+              -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16
+              -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
     env:
       VULKAN_VERSION: "1.4.357.0"
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch == 'arm64' && 'arm64' || 'x64' }}
       - name: Install the Vulkan SDK
         shell: pwsh
         run: |
-          curl.exe -fsSL -o "$env:RUNNER_TEMP\vulkan_sdk.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkan_sdk.exe"
+          curl.exe -fsSL -o "$env:RUNNER_TEMP\vulkan_sdk.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/${{ matrix.sdk }}/vulkan_sdk.exe"
           & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+      - name: Find clang
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          $llvm = @("C:\Program Files\LLVM\bin", "$env:VCINSTALLDIR\Tools\Llvm\ARM64\bin", "$env:VCINSTALLDIR\Tools\Llvm\bin") |
+            Where-Object { Test-Path "$_\clang.exe" } | Select-Object -First 1
+          if (-not $llvm) { throw "clang is not installed on this runner" }
+          Add-Content $env:GITHUB_PATH $llvm
+          & "$llvm\clang.exe" --version
       - name: Build
         shell: pwsh
         run: |
@@ -66,9 +99,9 @@ jobs:
             -DENGINE_ENABLE_CUDA=OFF `
             -DENGINE_ENABLE_VULKAN=ON `
             -DENGINE_ENABLE_NATIVE_CPU=OFF `
-            -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON `
             -DENGINE_ENABLE_LLAMAFILE=ON `
-            -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF
+            -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF `
+            ${{ matrix.defines }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build-t3 --target audiocpp --parallel $env:NUMBER_OF_PROCESSORS
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -80,17 +113,18 @@ jobs:
           Copy-Item LICENSE dist-lib/
           Copy-Item build-t3/bin/*.dll dist-lib/libs/
           # Hosts without the Visual C++ runtime installed still load the library.
-          $crt = Get-ChildItem "$env:VCToolsRedistDir\x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
+          $crt = Get-ChildItem "$env:VCToolsRedistDir\${{ matrix.arch }}" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
           Copy-Item "$($crt.FullName)\*.dll" dist-lib/libs/
           # Only the Vulkan plugin may import the loader, or GPU-less hosts could not load the library.
           $imports = dumpbin /dependents dist-lib/libs/audiocpp.dll | Out-String
           if ($imports -match "vulkan-1.dll") { throw "audiocpp.dll imports vulkan-1.dll" }
           if (-not (Test-Path dist-lib/libs/ggml-vulkan.dll)) { throw "the Vulkan plugin is missing" }
-          Compress-Archive -Path dist-lib/* -DestinationPath "audio-${{ inputs.tag }}-lib-windows-x64-vulkan.zip"
+          if (-not (Get-ChildItem dist-lib/libs -Filter "ggml-cpu*.dll")) { throw "the CPU backend is missing" }
+          Compress-Archive -Path dist-lib/* -DestinationPath "audio-${{ inputs.tag }}-lib-windows-${{ matrix.arch }}-vulkan.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-x64
-          path: audio-${{ inputs.tag }}-lib-windows-x64-vulkan.zip
+          name: windows-${{ matrix.arch }}
+          path: audio-${{ inputs.tag }}-lib-windows-${{ matrix.arch }}-vulkan.zip
 
   macos:
     name: macOS ${{ matrix.arch }}
@@ -133,6 +167,7 @@ jobs:
           path: audio-${{ inputs.tag }}-lib-macos-${{ matrix.arch }}-${{ matrix.backend }}.tar.gz
 
   release:
+    if: inputs.publish
     needs: [linux, windows, macos]
     runs-on: ubuntu-24.04
     steps:
