@@ -160,6 +160,9 @@ endif()
 option(ENGINE_ENABLE_CPU_ALL_VARIANTS
     "Build CPU backends as dynamic libraries with per-ISA variants (for Docker/portable builds)"
     OFF)
+option(ENGINE_ENABLE_BACKEND_PLUGINS
+    "Build ggml backends as dynamic libraries with one CPU backend (when per-ISA variants are unavailable)"
+    OFF)
 option(ENGINE_BUILD_EXAMPLES "Build example binaries" OFF)
 option(ENGINE_BUILD_TESTS "Build framework unit tests" OFF)
 option(ENGINE_BUILD_EXTENDED_TESTS "Build extended non-model tests and probes" OFF)
@@ -388,6 +391,15 @@ if (ENGINE_ENABLE_CPU_ALL_VARIANTS)
     set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "Build all CPU backend variants" FORCE)
     set(GGML_NATIVE OFF CACHE BOOL "Build ggml CPU kernels with native host ISA flags" FORCE)
     # Ensure libraries in the same directory as the binary are found at runtime
+    set(CMAKE_INSTALL_RPATH "\$ORIGIN")
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
+elseif (ENGINE_ENABLE_BACKEND_PLUGINS)
+    # For targets ggml has no CPU variant list for, such as Windows ARM64: backends still load
+    # as plugins, so a host without a GPU driver skips the GPU backend instead of failing to load.
+    set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE)
+    set(GGML_BACKEND_DL ON CACHE BOOL "Build backends as dynamic libraries" FORCE)
+    set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "Build all CPU backend variants" FORCE)
+    set(GGML_NATIVE ${ENGINE_ENABLE_NATIVE_CPU} CACHE BOOL "Build ggml CPU kernels with native host ISA flags" FORCE)
     set(CMAKE_INSTALL_RPATH "\$ORIGIN")
     set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
 else()
