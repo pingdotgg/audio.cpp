@@ -62,9 +62,10 @@ jobs:
           - arch: arm64
             runner: windows-11-arm
             sdk: warm
+            # Quoted: PowerShell splits an unquoted -argument at its first period.
             defines: >-
               -DENGINE_ENABLE_BACKEND_PLUGINS=ON
-              -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16
+              "-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16"
               -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
     env:
       VULKAN_VERSION: "1.4.357.0"
@@ -95,7 +96,7 @@ jobs:
           cmake -S . -B build-t3 -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             -DAUDIOCPP_BUILD_C_API=ON `
-            -DAUDIOCPP_VERSION="${{ inputs.tag }}" `
+            "-DAUDIOCPP_VERSION=${{ inputs.tag }}" `
             -DENGINE_ENABLE_CUDA=OFF `
             -DENGINE_ENABLE_VULKAN=ON `
             -DENGINE_ENABLE_NATIVE_CPU=OFF `
