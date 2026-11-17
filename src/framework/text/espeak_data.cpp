@@ -103,6 +103,9 @@ fs::path cache_base() {
     const auto anchored = [](const fs::path & path) {
         return fs::weakly_canonical(fs::absolute(path)) / "audio.cpp" / "espeak-data";
     };
+    // Lets an embedding application keep the extracted data inside its own state directory.
+    if (const char * own = std::getenv("AUDIOCPP_ESPEAK_CACHE"); own && *own)
+        return anchored(fs::u8path(own));
 #ifdef _WIN32
     const char * base = std::getenv("LOCALAPPDATA");
     if (!base || !*base) throw std::runtime_error("LOCALAPPDATA is required for the eSpeak cache");

@@ -28,8 +28,11 @@
 #include "engine/framework/runtime/options.h"
 #include "engine/framework/io/json.h"
 
+#include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <exception>
 #include <filesystem>
 #include <iterator>
@@ -39,6 +42,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -283,6 +287,9 @@ struct audiocpp_model {
     }
 };
 
+// Thrown from the stream sink to unwind a generation the caller abandoned.
+struct GenerationCancelled {};
+
 struct audiocpp_session {
     std::shared_ptr<rt::ModelRegistry> registry;
     std::shared_ptr<rt::ILoadedVoiceModel> model;
@@ -294,6 +301,34 @@ struct audiocpp_session {
         std::string value;
     };
     std::optional<PreparedSeed> prepared_seed;
+
+    // Text-driven families that generate inside start_stream publish each chunk through a sink.
+    // Generating on a thread lets audiocpp_stream_next_event hand chunks out as they are made.
+    struct Generation {
+        std::thread thread;
+        std::mutex mutex;
+        std::condition_variable ready;
+        std::deque<rt::StreamEvent> events;
+        bool done = false;
+        std::exception_ptr error;
+        std::atomic<bool> cancelled{false};
+    };
+    std::unique_ptr<Generation> generation;
+
+    // Waits for the generation thread, after asking it to stop when `cancel` is set.
+    std::exception_ptr end_generation(bool cancel) {
+        if (!generation) return nullptr;
+        generation->cancelled = cancel;
+        if (generation->thread.joinable()) generation->thread.join();
+        auto error = generation->error;
+        if (auto * streaming = dynamic_cast<rt::IStreamingVoiceTaskSession *>(session.get())) {
+            streaming->set_stream_event_sink({});
+        }
+        generation.reset();
+        return error;
+    }
+
+    ~audiocpp_session() { end_generation(true); }
 
     rt::IOfflineVoiceTaskSession & offline() const {
         auto * offline = dynamic_cast<rt::IOfflineVoiceTaskSession *>(session.get());
@@ -1336,8 +1371,37 @@ audiocpp_status audiocpp_stream_start(audiocpp_session * session, const audiocpp
         RequestSeedScope seed(*session, request);
         const rt::TaskRequest empty;
         const auto & task_request = request != nullptr ? request->request : empty;
+        session->end_generation(true);
         session->session->prepare(rt::build_preparation_request(task_request));
-        session->streaming().start_stream(task_request);
+        auto & streaming = session->streaming();
+        const auto policy = streaming.streaming_policy();
+        if (policy.input != rt::StreamingInputKind::None ||
+            policy.output != rt::StreamingOutputKind::FinalResult) {
+            streaming.start_stream(task_request);
+            return AUDIOCPP_OK;
+        }
+        auto generation = std::make_unique<audiocpp_session::Generation>();
+        auto * state = generation.get();
+        streaming.set_stream_event_sink([state](const rt::StreamEvent & event) {
+            if (state->cancelled) throw GenerationCancelled{};
+            const std::lock_guard<std::mutex> lock(state->mutex);
+            state->events.push_back(event);
+            state->ready.notify_one();
+        });
+        state->thread = std::thread([state, &streaming, request = task_request] {
+            std::exception_ptr error;
+            try {
+                streaming.start_stream(request);
+            } catch (const GenerationCancelled &) {
+            } catch (...) {
+                error = std::current_exception();
+            }
+            const std::lock_guard<std::mutex> lock(state->mutex);
+            state->error = error;
+            state->done = true;
+            state->ready.notify_all();
+        });
+        session->generation = std::move(generation);
         return AUDIOCPP_OK;
     });
 }
@@ -1377,6 +1441,19 @@ audiocpp_status audiocpp_stream_next_event(audiocpp_session * session, audiocpp_
     *out_event = nullptr;
     { const audiocpp_status s = require_streaming(session); if (s != AUDIOCPP_OK) return s; }
     return guard([&] {
+        if (auto * state = session->generation.get()) {
+            std::unique_lock<std::mutex> lock(state->mutex);
+            state->ready.wait(lock, [state] { return !state->events.empty() || state->done; });
+            if (!state->events.empty()) {
+                auto event = std::move(state->events.front());
+                state->events.pop_front();
+                lock.unlock();
+                *out_event = wrap_event(std::move(event)).release();
+            } else if (state->error) {
+                std::rethrow_exception(state->error);
+            }
+            return AUDIOCPP_OK;
+        }
         auto event = session->streaming().next_stream_event();
         /* An empty queue is a normal outcome, not a failure. */
         if (event.has_value()) {
@@ -1393,6 +1470,7 @@ audiocpp_status audiocpp_stream_finish(audiocpp_session * session, audiocpp_resu
     *out_result = nullptr;
     { const audiocpp_status s = require_streaming(session); if (s != AUDIOCPP_OK) return s; }
     return guard([&] {
+        if (const auto error = session->end_generation(false)) std::rethrow_exception(error);
         auto handle = std::make_unique<audiocpp_result>();
         handle->result = session->streaming().finish_stream();
         *out_result = handle.release();
@@ -1406,6 +1484,7 @@ audiocpp_status audiocpp_stream_reset(audiocpp_session * session) {
     }
     { const audiocpp_status s = require_streaming(session); if (s != AUDIOCPP_OK) return s; }
     return guard([&] {
+        session->end_generation(true);
         session->prepared_seed.reset();
         session->streaming().reset();
         return AUDIOCPP_OK;
