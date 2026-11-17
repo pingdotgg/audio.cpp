@@ -27,6 +27,9 @@ if(EMSCRIPTEN)
         "-DCMAKE_C_FLAGS_DEBUG:STRING=${CMAKE_C_FLAGS_DEBUG}"
         "-DCMAKE_CXX_FLAGS_DEBUG:STRING=${CMAKE_CXX_FLAGS_DEBUG}")
 endif()
+# eSpeak's static build is validated with MSVC on Windows; clang builds can still use it.
+set(AUDIOCPP_ESPEAK_C_COMPILER "${CMAKE_C_COMPILER}" CACHE FILEPATH "C compiler for the eSpeak-ng build")
+set(AUDIOCPP_ESPEAK_CXX_COMPILER "${CMAKE_CXX_COMPILER}" CACHE FILEPATH "C++ compiler for the eSpeak-ng build")
 set(_espeak_root "${CMAKE_BINARY_DIR}/_deps/espeak-static")
 set(_espeak_source "${_espeak_root}/source")
 set(_espeak_build "${_espeak_root}/build")
@@ -43,8 +46,8 @@ ExternalProject_Add(audiocpp_espeak_source
         -P "${CMAKE_CURRENT_LIST_DIR}/espeak_patch.cmake"
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=${_espeak_config}
-        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
-        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DCMAKE_C_COMPILER=${AUDIOCPP_ESPEAK_C_COMPILER}
+        -DCMAKE_CXX_COMPILER=${AUDIOCPP_ESPEAK_CXX_COMPILER}
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         -DCMAKE_INSTALL_PREFIX=<BINARY_DIR>/install
         -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=<BINARY_DIR>/lib
