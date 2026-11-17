@@ -32,12 +32,16 @@ cmake -S . -B "$BUILD" -G Ninja \
     -DENGINE_ENABLE_NATIVE_CPU=OFF \
     -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON \
     -DENGINE_ENABLE_LLAMAFILE=ON \
-    -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF
+    -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF \
+    -DAUDIOCPP_STATIC_ESPEAK=ON
 cmake --build "$BUILD" --target audiocpp --parallel "$(nproc)"
 
 rm -rf "$DIST" && mkdir -p "$DIST/libs" "$DIST/include"
 cp include/audiocpp.h "$DIST/include/"
 cp LICENSE "$DIST/"
+# eSpeak's source archive ships once per release rather than in every archive.
+mkdir -p "$DIST/licenses/espeak-ng"
+find "$BUILD/bin/licenses/espeak-ng" -maxdepth 1 -type f ! -name '*.tar.gz' -exec cp {} "$DIST/licenses/espeak-ng/" \;
 find "$BUILD/bin" -maxdepth 1 -name '*.so*' -exec cp -P {} "$DIST/libs/" \;
 
 # Fail rather than publish a build that would not load where it is meant to.

@@ -4,6 +4,7 @@ name: T3 release
 # a GitHub release. Linux builds in manylinux_2_28 so they load on glibc 2.28 and newer. Linux and
 # Windows load Vulkan and the per-CPU-generation kernels as ggml plugins, so hosts without a GPU
 # or Vulkan loader fall back to the CPU. OpenMP is off, so nothing depends on libgomp or vcomp.
+# eSpeak-ng is linked in for Kokoro; its data package and source archive are published once.
 
 on:
   workflow_dispatch:
@@ -102,6 +103,7 @@ jobs:
             -DENGINE_ENABLE_NATIVE_CPU=OFF `
             -DENGINE_ENABLE_LLAMAFILE=ON `
             -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF `
+            -DAUDIOCPP_STATIC_ESPEAK=ON `
             ${{ matrix.defines }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build-t3 --target audiocpp --parallel $env:NUMBER_OF_PROCESSORS
@@ -112,6 +114,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist-lib/libs, dist-lib/include | Out-Null
           Copy-Item include/audiocpp.h dist-lib/include/
           Copy-Item LICENSE dist-lib/
+          New-Item -ItemType Directory -Force -Path dist-lib/licenses/espeak-ng | Out-Null
+          Copy-Item build-t3/bin/licenses/espeak-ng/* dist-lib/licenses/espeak-ng/ -Exclude *.tar.gz
           Copy-Item build-t3/bin/*.dll dist-lib/libs/
           # Hosts without the Visual C++ runtime installed still load the library.
           $crt = Get-ChildItem "$env:VCToolsRedistDir\${{ matrix.arch }}" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
@@ -155,17 +159,30 @@ jobs:
             -DENGINE_ENABLE_CUDA=OFF -DENGINE_ENABLE_VULKAN=OFF \
             -DGGML_METAL=${{ matrix.metal }} \
             -DENGINE_ENABLE_LLAMAFILE=ON \
-            -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF
+            -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF \
+            -DAUDIOCPP_STATIC_ESPEAK=ON
           cmake --build build-t3 --target audiocpp --parallel "$(sysctl -n hw.logicalcpu)"
-          mkdir -p dist-lib/libs dist-lib/include
+          mkdir -p dist-lib/libs dist-lib/include dist-lib/licenses/espeak-ng
           cp include/audiocpp.h dist-lib/include/
           cp LICENSE dist-lib/
+          find build-t3/bin/licenses/espeak-ng -maxdepth 1 -type f ! -name '*.tar.gz' -exec cp {} dist-lib/licenses/espeak-ng/ \;
           find build-t3/bin -maxdepth 1 -name '*.dylib' -exec cp -P {} dist-lib/libs/ \;
           tar -czf "audio-${{ inputs.tag }}-lib-macos-${{ matrix.arch }}-${{ matrix.backend }}.tar.gz" -C dist-lib .
+      - name: Stage eSpeak data and source
+        if: matrix.arch == 'arm64'
+        run: |
+          mkdir -p espeak
+          cp build-t3/bin/espeak-ng-data.bin "espeak/audio-${{ inputs.tag }}-espeak-ng-data.bin"
+          cp build-t3/bin/licenses/espeak-ng/*.tar.gz espeak/
       - uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
           path: audio-${{ inputs.tag }}-lib-macos-${{ matrix.arch }}-${{ matrix.backend }}.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: matrix.arch == 'arm64'
+        with:
+          name: espeak
+          path: espeak/*
 
   release:
     if: inputs.publish
