@@ -68,6 +68,7 @@ jobs:
               -DENGINE_ENABLE_BACKEND_PLUGINS=ON
               "-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16"
               -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+              -DAUDIOCPP_ESPEAK_C_COMPILER=cl -DAUDIOCPP_ESPEAK_CXX_COMPILER=cl
     env:
       VULKAN_VERSION: "1.4.357.0"
     steps:
@@ -108,6 +109,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build-t3 --target audiocpp --parallel $env:NUMBER_OF_PROCESSORS
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Show the eSpeak build log
+        if: failure()
+        shell: pwsh
+        run: Get-Content build-t3/audiocpp_espeak_source-prefix/src/audiocpp_espeak_source-stamp/*-build-*.log -Tail 80
       - name: Stage and check
         shell: pwsh
         run: |
