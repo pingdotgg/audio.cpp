@@ -21,13 +21,20 @@ The `T3 release` workflow builds the library the way transcribe.cpp builds its o
   variant list, so the fork's `ENGINE_ENABLE_BACKEND_PLUGINS` option keeps Vulkan a plugin with one
   CPU backend targeting `armv8.2-a+dotprod+fp16`, which every Windows 11 ARM CPU supports.
 - OpenMP off everywhere.
-- eSpeak-ng linked in (`AUDIOCPP_STATIC_ESPEAK`) for Kokoro. Its data package and source archive
-  are published once per release; T3 Code downloads the data with Kokoro and points
+- eSpeak-ng linked in (`AUDIOCPP_STATIC_ESPEAK`) for the families that phonemize with it, such as
+  Kokoro, Piper, and Kitten TTS. Its data package and source archive are published once per
+  release; T3 Code downloads the data with those models and points
   `AUDIOCPP_ESPEAK_DATA` and `AUDIOCPP_ESPEAK_CACHE` at its own state directory. Windows ARM64
   builds eSpeak with MSVC, since eSpeak's static build is only validated with it on Windows.
 
+To update from upstream, rebase `t3/portable-builds` onto `upstream/main` and keep the fork's
+commits on top, so each stays a reviewable patch. Build the macOS library locally and run T3 Code's
+local voices against it before releasing. Keep the old branch tip under a `backup/` tag until the
+new release ships.
+
 To release, run the `T3 release` workflow with a tag such as `t3-2026.11.15`, then pin the
 published archives and their SHA-256 hashes in T3 Code's `packages/audio-cpp/src/runtime.ts`.
+Releases stay published, since older T3 Code builds download the ones they pin.
 
 To try a Linux build locally:
 
