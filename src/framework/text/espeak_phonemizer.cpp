@@ -2,6 +2,7 @@
 #include "engine/framework/text/espeak_data.h"
 #include "engine/framework/io/dynamic_library.h"
 
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -125,6 +126,10 @@ EspeakPhonemizer::EspeakPhonemizer(std::filesystem::path library,
       data_(data.empty() ? data : std::filesystem::absolute(data).lexically_normal()),
       voices_(std::move(voices)) {
 #ifdef AUDIOCPP_STATIC_ESPEAK
+    // An embedding host names the data package once for every family, as Kokoro reads it.
+    const auto * data_override = std::getenv("AUDIOCPP_ESPEAK_DATA");
+    if (library_.empty() && data_.empty() && data_override && *data_override)
+        data_ = std::filesystem::absolute(std::filesystem::u8path(data_override)).lexically_normal();
     if (library_.empty() && data_.empty()) {
         const auto root = executable_directory();
         data_ = std::filesystem::is_regular_file(root / "espeak-ng-data.bin")
